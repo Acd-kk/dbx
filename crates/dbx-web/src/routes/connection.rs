@@ -1494,7 +1494,13 @@ mod tests {
                 .await
                 .unwrap_or_else(|error| panic!("{}", error.message));
         assert_eq!(detailed.0.message, "Connection successful");
-        assert_eq!(detailed.0.database_info, None);
+        let sqlite = dbx_core::db::sqlite::connect_path(":memory:").await.unwrap();
+        let version = dbx_core::db::sqlite::execute_query(&sqlite, "SELECT sqlite_version()").await.unwrap();
+        let expected_version = version.rows[0][0].as_str().expect("SQLite must report its engine version");
+        drop(sqlite);
+        let info = detailed.0.database_info.expect("SQLite connection tests should return database information");
+        assert_eq!(info.product_name.as_deref(), Some(DatabaseType::Sqlite.as_str()));
+        assert_eq!(info.product_version.as_deref(), Some(expected_version));
         assert!(state.app.configs.read().await.keys().all(|key| !key.starts_with("__test_")));
         assert!(state.app.with_connection_pools(|pools| pools.keys().all(|key| !key.starts_with("__test_"))).await);
 
