@@ -1484,6 +1484,7 @@ export default withEnglishFallback({
     editTitle: "연결 편집",
     testSuccess: "연결 성공",
     databaseInfo: {
+      unknownVersion: "버전 알 수 없음",
       title: "데이터베이스 정보",
       open: "{database}의 데이터베이스 정보 열기",
       copy: "데이터베이스 정보 복사",

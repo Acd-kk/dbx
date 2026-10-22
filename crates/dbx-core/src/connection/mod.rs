@@ -243,6 +243,12 @@ impl std::ops::Deref for ConnectionPoolRegistry {
 }
 
 enum ConnectionDatabaseInfoSource {
+    NativeSql(&'static str),
+    Vector(db::vector_driver::VectorClient),
+    CouchDb(db::couchdb_driver::CouchDbClient),
+    Elasticsearch(db::elasticsearch_driver::EsClient),
+    Easysearch(db::easysearch_driver::EasysearchClient),
+    Solr(db::solr_driver::SolrClient),
     Agent(Arc<db::agent_driver::PooledAgentClient>),
     MongoAgent(Arc<db::agent_driver::PooledAgentClient>, Option<String>),
     ExternalDriver {
@@ -5560,6 +5566,23 @@ impl AppState {
                 {
                     Some(ConnectionDatabaseInfoSource::NativeGaussdbDws(pool.clone()))
                 }
+                Some(PoolKind::Postgres(_)) => Some(ConnectionDatabaseInfoSource::NativeSql("SELECT version()")),
+                Some(PoolKind::Sqlite(_) | PoolKind::Rqlite(_) | PoolKind::Turso(_) | PoolKind::CloudflareD1(_)) => {
+                    Some(ConnectionDatabaseInfoSource::NativeSql("SELECT sqlite_version()"))
+                }
+                Some(PoolKind::DuckDbWorker(_) | PoolKind::ClickHouse(_)) => {
+                    Some(ConnectionDatabaseInfoSource::NativeSql("SELECT version()"))
+                }
+                Some(PoolKind::SqlServer(_)) => Some(ConnectionDatabaseInfoSource::NativeSql(
+                    "SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(128))",
+                )),
+                Some(PoolKind::VectorDb(client)) => Some(ConnectionDatabaseInfoSource::Vector(client.clone())),
+                Some(PoolKind::CouchDb(client)) => Some(ConnectionDatabaseInfoSource::CouchDb(client.clone())),
+                Some(PoolKind::Elasticsearch(client)) => {
+                    Some(ConnectionDatabaseInfoSource::Elasticsearch(client.clone()))
+                }
+                Some(PoolKind::Easysearch(client)) => Some(ConnectionDatabaseInfoSource::Easysearch(client.clone())),
+                Some(PoolKind::Solr(client)) => Some(ConnectionDatabaseInfoSource::Solr(client.clone())),
                 Some(PoolKind::Mysql(pool, _)) => Some(ConnectionDatabaseInfoSource::NativeMysql(pool.clone())),
                 Some(PoolKind::HBase(client)) => Some(ConnectionDatabaseInfoSource::NativeHBase(client.clone())),
                 Some(PoolKind::MongoDb(client)) => {
@@ -5579,6 +5602,42 @@ impl AppState {
         };
 
         match source {
+            Some(ConnectionDatabaseInfoSource::NativeSql(sql)) => {
+                let database = database.or_else(|| config.effective_database()).unwrap_or_default();
+                let result =
+                    crate::query::execute_sql_statement(self, connection_id, database, sql, None, None).await?;
+                let product_version = result
+                    .rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|version| !version.is_empty())
+                    .map(str::to_string);
+                Ok(Some(DatabaseConnectionInfo {
+                    product_name: Some(
+                        config.driver_label.clone().unwrap_or_else(|| config.db_type.as_str().to_string()),
+                    ),
+                    product_version,
+                    current_database: (!database.is_empty()).then(|| database.to_string()),
+                    ..Default::default()
+                }))
+            }
+            Some(ConnectionDatabaseInfoSource::Vector(client)) => {
+                db::vector_driver::database_connection_info(&client).await.map(Some)
+            }
+            Some(ConnectionDatabaseInfoSource::CouchDb(client)) => {
+                db::couchdb_driver::database_connection_info(&client).await.map(Some)
+            }
+            Some(ConnectionDatabaseInfoSource::Elasticsearch(client)) => {
+                db::elasticsearch_driver::database_connection_info(&client).await.map(Some)
+            }
+            Some(ConnectionDatabaseInfoSource::Easysearch(client)) => {
+                db::easysearch_driver::database_connection_info(&client).await.map(Some)
+            }
+            Some(ConnectionDatabaseInfoSource::Solr(client)) => {
+                db::solr_driver::database_connection_info(&client).await.map(Some)
+            }
             Some(ConnectionDatabaseInfoSource::Agent(client)) => {
                 let mut agent = client.lock().await;
                 Ok(agent.connection_info(Some(db::connection_timeout())).await?.database_info)
@@ -8671,6 +8730,26 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let storage = crate::persistence::test_storage::open(&dir.join("storage.db")).await.unwrap();
         (AppState::new(storage), dir)
+    }
+
+    #[tokio::test]
+    async fn database_info_reads_the_live_sqlite_engine_version() {
+        let (state, dir) = test_app_state().await;
+        let mut config = mysql_config(None);
+        config.id = "sqlite-version".to_string();
+        config.db_type = DatabaseType::Sqlite;
+        config.driver_label = Some("SQLite".to_string());
+        config.host = ":memory:".to_string();
+        config.password.clear();
+        let id = config.id.clone();
+        state.configs.write().await.insert(id.clone(), config);
+
+        let info = state.connection_database_info(&id, None).await.unwrap().unwrap();
+        assert_eq!(info.product_name.as_deref(), Some("SQLite"));
+        assert_eq!(info.product_version.as_deref(), Some(rusqlite::version()));
+        state.remove_connection_pools(&id).await;
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

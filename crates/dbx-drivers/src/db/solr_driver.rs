@@ -203,6 +203,22 @@ pub async fn test_connection(client: &mut SolrClient, timeout: Duration) -> Resu
     Ok(())
 }
 
+pub async fn database_connection_info(
+    client: &SolrClient,
+) -> Result<crate::models::connection::DatabaseConnectionInfo, String> {
+    let response = client
+        .get("/admin/info/system?wt=json")
+        .send()
+        .await
+        .map_err(|error| format!("Solr request failed: {error}"))?;
+    let body = read_solr_json(response).await?;
+    Ok(crate::models::connection::DatabaseConnectionInfo {
+        product_name: Some("Solr".to_string()),
+        product_version: body.pointer("/lucene/solr-spec-version").and_then(Value::as_str).map(str::to_string),
+        ..Default::default()
+    })
+}
+
 /// 单机模式枚举 core：`GET /solr/admin/cores?action=STATUS`。
 /// SolrCloud 语义上的 collection 列表（`/api/collections`）留待后续扩展。
 pub async fn list_cores(client: &SolrClient) -> Result<Vec<String>, String> {

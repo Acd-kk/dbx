@@ -5,6 +5,7 @@ use std::error::Error;
 use std::time::{Duration, Instant};
 
 use super::{http_client_builder, with_connection_timeout};
+use crate::models::connection::DatabaseConnectionInfo;
 use crate::types::QueryResult;
 
 const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
@@ -185,6 +186,34 @@ fn test_connection_request(client: &VectorClient) -> reqwest::RequestBuilder {
         VectorDbKind::Weaviate => client.get("/v1/meta"),
         VectorDbKind::ChromaDb => client.get(&client.chroma_collections_path()),
     }
+}
+
+pub async fn database_connection_info(client: &VectorClient) -> Result<DatabaseConnectionInfo, String> {
+    let path = match client.kind {
+        VectorDbKind::Qdrant => Some("/"),
+        VectorDbKind::Weaviate => Some("/v1/meta"),
+        VectorDbKind::ChromaDb => Some("/api/v2/version"),
+        // The REST API used by this client does not expose GetVersion (gRPC).
+        // Do not guess a management port or use the client package version.
+        VectorDbKind::Milvus => None,
+    };
+    let product_version = if let Some(path) = path {
+        let response = send_json(client.get(path), client.kind).await?;
+        response
+            .as_str()
+            .or_else(|| response.get("version").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|version| !version.is_empty())
+            .map(str::to_string)
+    } else {
+        None
+    };
+    Ok(DatabaseConnectionInfo {
+        product_name: Some(client.kind.label().to_string()),
+        product_version,
+        current_database: client.database.clone(),
+        ..Default::default()
+    })
 }
 
 fn vector_auth(kind: VectorDbKind, username: Option<&str>, password: Option<&str>) -> Option<VectorAuth> {
@@ -1082,11 +1111,11 @@ fn format_reqwest_error(err: &reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        chroma_get_response_to_rows, default_collection_query, execute_rest_query, find_documents,
-        json_to_query_result, milvus_collection_schema, milvus_database_names, parse_rest_query, rename_collection,
-        response_origin, rest_query_result, starts_with_http_method, test_connection, test_connection_request,
-        vector_auth, weaviate_collection_names_from_schema, weaviate_vector_dimension_from_graphql, CollectionInfo,
-        ResponseOrigin, VectorAuth, VectorClient, VectorDbKind,
+        chroma_get_response_to_rows, database_connection_info, default_collection_query, execute_rest_query,
+        find_documents, json_to_query_result, milvus_collection_schema, milvus_database_names, parse_rest_query,
+        rename_collection, response_origin, rest_query_result, starts_with_http_method, test_connection,
+        test_connection_request, vector_auth, weaviate_collection_names_from_schema,
+        weaviate_vector_dimension_from_graphql, CollectionInfo, ResponseOrigin, VectorAuth, VectorClient, VectorDbKind,
     };
     use serde_json::{json, Value};
     use std::time::{Duration, Instant};
@@ -1423,6 +1452,40 @@ mod tests {
             "POST /api/v2/tenants/default_tenant/databases/default_database/collections/docs/get HTTP/1.1\r\n"
         ));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn database_info_reads_vector_server_versions_with_connection_auth() {
+        for (kind, body, path, auth_header) in [
+            (VectorDbKind::Qdrant, json!({"version": "1.12.0"}), "/", "api-key: secret"),
+            (VectorDbKind::Weaviate, json!({"version": "1.27.0"}), "/v1/meta", "authorization: Bearer secret"),
+            (VectorDbKind::ChromaDb, json!("0.6.3"), "/api/v2/version", "x-chroma-token: secret"),
+        ] {
+            let (url, request_rx, server) = spawn_recording_json_response_server(body.clone()).await;
+            let client = VectorClient::new(kind, &url, None, Some("secret"), false, Duration::from_secs(2));
+            let info = database_connection_info(&client).await.unwrap();
+            let expected = body.as_str().or_else(|| body.get("version").and_then(Value::as_str));
+            assert_eq!(info.product_version.as_deref(), expected);
+            assert_eq!(info.product_name.as_deref(), Some(kind.label()));
+            let request = request_rx.await.unwrap();
+            assert!(request.starts_with(&format!("GET {path} HTTP/1.1\r\n")));
+            assert!(request.contains(auth_header));
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn database_info_keeps_missing_vector_versions_unknown() {
+        let (url, server) = spawn_json_response_server(json!({"version": "  "})).await;
+        let client = VectorClient::new(VectorDbKind::Qdrant, &url, None, None, false, Duration::from_secs(2));
+        assert_eq!(database_connection_info(&client).await.unwrap().product_version, None);
+        server.await.unwrap();
+
+        let client =
+            VectorClient::new(VectorDbKind::Milvus, "http://127.0.0.1:1", None, None, false, Duration::from_secs(2));
+        let info = database_connection_info(&client).await.unwrap();
+        assert_eq!(info.product_name.as_deref(), Some("Milvus"));
+        assert_eq!(info.product_version, None);
     }
 
     async fn spawn_json_response_server(body: Value) -> (String, tokio::task::JoinHandle<()>) {

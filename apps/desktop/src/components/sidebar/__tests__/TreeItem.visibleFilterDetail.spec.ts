@@ -141,6 +141,15 @@ afterEach(() => {
 });
 
 describe("TreeItem visible filter connection detail", () => {
+  it("shows only the prefixed server version on the connection row", async () => {
+    state.config = { ...mysqlConnection(), db_type: "qdrant", database_info: { productVersion: "1.12.0" } };
+    await openConnectionTooltip();
+
+    const summary = document.querySelector("[data-node-id='connection-1'] [data-connection-version]");
+    expect(summary?.textContent?.trim()).toBe("v1.12.0");
+    expect(document.body.textContent).toContain("Server version");
+  });
+
   it("shows the tenant separator without URL escaping while copied URLs remain round-trippable", async () => {
     state.config = { ...mysqlConnection(), driver_profile: "oceanbase", username: "admin@tenant", port: 2881, url_params: "password=synthetic-secret" };
 

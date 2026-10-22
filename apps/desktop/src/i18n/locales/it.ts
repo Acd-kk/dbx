@@ -1625,6 +1625,7 @@ export default withEnglishFallback({
     mqTokenSigningKeyPlaceholderRs256: "-----BEGIN PRIVATE KEY-----",
     mqTokenSigningHint: "Seleziona in base a jwt.broker.token.mode del broker: SECRET usa HS256, PRIVATE usa RS256. La chiave viene salvata nei secret della connessione.",
     databaseInfo: {
+      unknownVersion: "Versione sconosciuta",
       title: "Informazioni sul database",
       open: "Apri informazioni database {database}",
       copy: "Copia informazioni database",

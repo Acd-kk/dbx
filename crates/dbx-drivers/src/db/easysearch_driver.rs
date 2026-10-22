@@ -54,6 +54,14 @@ pub async fn test_connection(client: &mut EasysearchClient, timeout: Duration) -
     elasticsearch_driver::test_connection(&mut client.inner, timeout).await.map_err(easysearch_error)
 }
 
+pub async fn database_connection_info(
+    client: &EasysearchClient,
+) -> Result<crate::models::connection::DatabaseConnectionInfo, String> {
+    let mut info = elasticsearch_driver::database_connection_info(&client.inner).await.map_err(easysearch_error)?;
+    info.product_name = Some("Easysearch".to_string());
+    Ok(info)
+}
+
 pub async fn list_indices(client: &EasysearchClient) -> Result<Vec<String>, String> {
     elasticsearch_driver::list_indices(&client.inner).await.map_err(easysearch_error)
 }

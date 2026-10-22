@@ -1579,6 +1579,7 @@ export default withEnglishFallback({
     editTitle: "Изменить подключение",
     testSuccess: "Подключение выполнено",
     databaseInfo: {
+      unknownVersion: "Версия неизвестна",
       title: "Сведения о базе данных",
       open: "Открыть сведения о базе данных {database}",
       copy: "Копировать сведения о базе данных",

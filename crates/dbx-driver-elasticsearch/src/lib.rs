@@ -418,6 +418,21 @@ pub async fn test_connection(client: &mut EsClient, timeout: Duration) -> Result
     }
 }
 
+pub async fn database_connection_info(
+    client: &EsClient,
+) -> Result<dbx_types::models::connection::DatabaseConnectionInfo, String> {
+    let response = client.get("/").send().await.map_err(|error| format!("Elasticsearch request failed: {error}"))?;
+    if !client.response_status(&response).is_success() {
+        return Err(format!("Elasticsearch error: {}", response.text().await.unwrap_or_default()));
+    }
+    let body: Value = response.json().await.map_err(|error| format!("Elasticsearch parse error: {error}"))?;
+    Ok(dbx_types::models::connection::DatabaseConnectionInfo {
+        product_name: Some("Elasticsearch".to_string()),
+        product_version: body.pointer("/version/number").and_then(Value::as_str).map(str::to_string),
+        ..Default::default()
+    })
+}
+
 pub fn elasticsearch_accept_invalid_certs(tls_enabled: bool, url_params: Option<&str>) -> bool {
     tls_enabled
         || elasticsearch_url_params_flag(url_params, "sslmode", &["disable", "allow"])
@@ -3481,6 +3496,20 @@ mod tests {
                 .unwrap_or((404, "{}"));
             write_json_http_response(&mut socket, status, body).await;
         }
+    }
+
+    #[tokio::test]
+    async fn database_info_reads_the_server_version_from_the_root_endpoint() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_elasticsearch_json_routes(
+            listener,
+            vec![("/", 200, r#"{"version":{"number":"8.16.0","lucene_version":"9.12.0"}}"#)],
+        ));
+        let client = EsClient::new(&format!("http://{addr}"), None, None, false, Duration::from_secs(2));
+        let info = super::database_connection_info(&client).await.unwrap();
+        assert_eq!(info.product_version.as_deref(), Some("8.16.0"));
+        server.await.unwrap();
     }
 
     #[tokio::test]

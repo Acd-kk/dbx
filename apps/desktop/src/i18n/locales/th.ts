@@ -1774,6 +1774,7 @@ export default withEnglishFallback({
     editTitle: "แก้ไขการเชื่อมต่อ",
     testSuccess: "เชื่อมต่อสำเร็จ",
     databaseInfo: {
+      unknownVersion: "ไม่ทราบเวอร์ชัน",
       title: "ข้อมูลฐานข้อมูล",
       open: "เปิดข้อมูลฐานข้อมูลของ {database}",
       copy: "คัดลอกข้อมูลฐานข้อมูล",

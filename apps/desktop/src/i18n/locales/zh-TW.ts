@@ -1634,6 +1634,7 @@ export default withEnglishFallback({
     mqTokenSigningKeyPlaceholderRs256: "-----BEGIN PRIVATE KEY-----",
     mqTokenSigningHint: "依 Broker 的 jwt.broker.token.mode 選擇：SECRET 使用 HS256，PRIVATE 使用 RS256。金鑰會透過連線 secret 儲存。",
     databaseInfo: {
+      unknownVersion: "版本未知",
       title: "資料庫資訊",
       open: "開啟 {database} 資料庫資訊",
       copy: "複製資料庫資訊",

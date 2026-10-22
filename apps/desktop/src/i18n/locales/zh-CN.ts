@@ -1758,6 +1758,7 @@ export default withEnglishFallback({
     editTitle: "编辑连接",
     testSuccess: "连接成功",
     databaseInfo: {
+      unknownVersion: "版本未知",
       title: "数据库信息",
       open: "打开 {database} 数据库信息",
       copy: "复制数据库信息",

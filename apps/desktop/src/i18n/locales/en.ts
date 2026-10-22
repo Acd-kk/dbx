@@ -1824,6 +1824,7 @@ export default {
     editTitle: "Edit Connection",
     testSuccess: "Connection successful",
     databaseInfo: {
+      unknownVersion: "Version unknown",
       title: "Database information",
       open: "Open database information for {database}",
       copy: "Copy database information",
