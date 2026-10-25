@@ -5,6 +5,25 @@ use crate::models::connection::DatabaseType;
 use crate::query::{execute_sql_statement_with_options, QueryExecutionOptions};
 use crate::types::QueryResult;
 
+/// Cleanup only drops our generated temporary table; a bounded wait keeps a
+/// broken worker from hanging export completion, but the wait must not be
+/// turned into a kill (see `TemporaryDdlPolicy::Cleanup`).
+#[cfg(feature = "duckdb-sidecar")]
+const SNAPSHOT_CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Timeout policy for the snapshot's own temporary-table DDL. These statements
+/// must not inherit the interactive query timeout: materialization scans the
+/// whole source query, while cleanup must never restart a shared worker.
+#[derive(Clone, Copy)]
+enum TemporaryDdlPolicy {
+    /// Unbounded, like the previous page-by-page export whose individual page
+    /// queries stayed inside the interactive timeout. An explicit user cancel
+    /// still aborts it through the cancel token.
+    Materialize,
+    /// Best-effort cleanup with a bounded wait that only interrupts.
+    Cleanup,
+}
+
 /// A single execution of an export query, stored in DuckDB's temporary catalog.
 /// Independent LIMIT/OFFSET queries can overlap when ORDER BY contains ties,
 /// including when preserve_insertion_order is enabled.
@@ -69,7 +88,7 @@ impl DuckDbExportSnapshot {
         state: &AppState,
         sql: &str,
         cancel_token: Option<CancellationToken>,
-        cleanup: bool,
+        policy: TemporaryDdlPolicy,
     ) -> Result<(), String> {
         #[cfg(feature = "duckdb-sidecar")]
         {
@@ -77,20 +96,33 @@ impl DuckDbExportSnapshot {
             let Some(crate::connection::PoolKind::DuckDbWorker(client)) = state.pool_handle(pool_key).await else {
                 return Err("DuckDB export connection is closed".into());
             };
-            let timeout_secs = if cleanup {
-                5
-            } else if let Some(seconds) = self.options.timeout_secs {
-                seconds
-            } else {
-                state.configs.read().await.get(&self.connection_id).map_or(0, |config| config.query_timeout_secs)
-            };
-            let timeout = (timeout_secs > 0).then(|| std::time::Duration::from_secs(timeout_secs));
-            client.execute(Some(self.database.clone()), sql.to_string(), Some(1), cancel_token, timeout).await?;
+            match policy {
+                // Materialization is a full scan of the source query and can
+                // legitimately take longer than the interactive query timeout;
+                // inheriting it would SIGKILL the worker and lose the shared
+                // `:memory:` session before the export writes a single row.
+                TemporaryDdlPolicy::Materialize => {
+                    client.execute(Some(self.database.clone()), sql.to_string(), Some(1), cancel_token, None).await?;
+                }
+                // Cleanup runs on a shared connection: a 5s timeout that killed
+                // the worker would discard the whole session, so it may only
+                // interrupt the DROP and report the failure.
+                TemporaryDdlPolicy::Cleanup => {
+                    client
+                        .execute_interrupt_only(
+                            Some(self.database.clone()),
+                            sql.to_string(),
+                            Some(1),
+                            SNAPSHOT_CLEANUP_TIMEOUT,
+                        )
+                        .await?;
+                }
+            }
             Ok(())
         }
         #[cfg(not(feature = "duckdb-sidecar"))]
         {
-            let _ = (state, sql, cancel_token, cleanup);
+            let _ = (state, sql, cancel_token, policy);
             Err("DuckDB worker support is not compiled in this build".into())
         }
     }
@@ -145,7 +177,9 @@ impl DuckDbExportSnapshot {
              SELECT row_number() OVER (), * FROM (\n{sql}\n) AS \"__dbx_source\"{limit}",
             self.table
         );
-        self.execute_temporary_ddl(state, &create, cancel_token, false).await?;
+        self.execute_temporary_ddl(state, &create, cancel_token, TemporaryDdlPolicy::Materialize)
+            .await
+            .map_err(|error| format!("DuckDB export materialization failed: {error}"))?;
         Ok(())
     }
 
@@ -179,8 +213,8 @@ impl DuckDbExportSnapshot {
             return;
         }
         let sql = format!("DROP TABLE IF EXISTS {}", self.qualified_table());
-        if let Err(error) = self.execute_temporary_ddl(state, &sql, None, true).await {
-            log::warn!("Failed to remove DuckDB export snapshot: {error}");
+        if let Err(error) = self.execute_temporary_ddl(state, &sql, None, TemporaryDdlPolicy::Cleanup).await {
+            log::error!("Failed to remove DuckDB export snapshot table {}: {error}", self.table);
         }
     }
 }

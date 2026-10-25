@@ -1822,6 +1822,9 @@ async fn export_table_data_core_inner(
             request.schema.as_deref(),
             QueryExecutionOptions {
                 client_session_id: Some(client_session_id),
+                // Bounds the small paged reads only: materialization runs as a
+                // full source scan and deliberately ignores the interactive
+                // query timeout so it cannot SIGKILL the worker mid-export.
                 timeout_secs: Some(table_export_query_timeout_secs(state, &pool_key).await),
                 ..Default::default()
             },
