@@ -2402,6 +2402,7 @@ export interface TableStructureEditorDraft {
   starrocksLayoutDraft?: import("@/lib/table/starrocksAlterOptions").StarRocksLayoutDraft;
   starrocksSortColumns?: string[];
   starrocksPhysicalOptions?: import("@/lib/table/starrocksPhysicalOptions").StarRocksPhysicalOptionsDraft;
+  postgresForeignTable?: import("@/lib/table/postgresForeignTable").PostgresForeignTableDraft;
   tableOwner?: string;
   originalTableOwner?: string;
   columns: import("@/lib/table/tableStructureEditorSql").EditableStructureColumn[];
