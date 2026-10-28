@@ -367,6 +367,19 @@ async fn pl_debug_process_exit_requires_the_child_status_not_only_a_reaper_flag(
 }
 
 #[tokio::test]
+async fn pl_debug_confirmed_process_exit_survives_child_lock_contention() {
+    use futures::FutureExt;
+
+    let fixture = Fixture::spawn("normal").await;
+    fixture.channel.fail_stop();
+    assert!(fixture.channel.wait_for_exit(TEST_TIMEOUT).await);
+
+    // Another exit observer/reaper can own the lock after exit was confirmed.
+    let _child = fixture.runtime.child.lock().unwrap();
+    assert_eq!(fixture.channel.wait_for_exit(Duration::ZERO).now_or_never(), Some(true));
+}
+
+#[tokio::test]
 async fn pl_debug_runtime_retirement_requires_exit_and_releases_the_original_reservation_once() {
     let fixture = Fixture::spawn("normal").await;
     let manager = crate::agent_manager::AgentManager::new_with_base_dir_and_app_version(
